@@ -2,4 +2,4 @@
 .env
 .idea
 *.iml
-target_repo
+target_repos
