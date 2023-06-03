@@ -60,7 +60,7 @@ def ask_gpt4_about_code(structured_tokens, question, past_conversation="", max_t
     for file_data in structured_tokens:
         tokens = ' '.join(token[1] for token in file_data['tokens'])
         code_text += f"In the file '{file_data['file_path']}' of repo '{file_data['repo']}', the code is:\n{tokens}\n\n"
-    prompt = f"{code_text}{past_conversation}{question}"
+    prompt = f"{code_text}{past_conversation}{question}\n(Wrap all code blocks it in triple backticks for highlighting.)"
     response = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=max_tokens)
     return response.choices[0].text.strip()
 
@@ -68,7 +68,7 @@ def prompt_user():
     while True:
 
         # Get repo url
-        repo_url = input(colored("\n>> Enter GitHub repository URL [https://github.com/Xaxis/chatgpt-code-analysis]: ", "green"))
+        repo_url = input(colored("\n>> Enter repo URL or name [Xaxis/chatgpt-code-analysis]: ", "green"))
         repo_url = repo_url if repo_url else "https://github.com/Xaxis/chatgpt-code-analysis"
         download_github_repo(repo_url, './target_repos')
         repo_name = repo_url.split('/')[-1]
@@ -94,15 +94,16 @@ def prompt_user():
                 end = answer.rindex("```")
                 code_block = answer[start:end].strip()
                 highlighted_code = highlight_code(code_block)
-                answer = answer.replace(code_block, highlighted_code)
+                highlighted_code = highlighted_code.replace("```", "")
+                answer = answer[:start-3] + highlighted_code + answer[end+3:]
 
             # Print answer
             print("\n", answer)
-            past_conversation += f"User: {question}\nGPT-4: {answer}\n"
+            past_conversation += answer + "\n\n"
 
             # Check if user wants to start a new session or continue asking questions
-            new_session = input(colored("\n>> Would you like to start a new session? (y/n) ", "green"))
-            if new_session.lower() == 'y':
+            new_session = input(colored("\n>> Ask another question? (y/n) ", "green"))
+            if new_session.lower() == 'n':
                 break
 
 # Main program initialization
