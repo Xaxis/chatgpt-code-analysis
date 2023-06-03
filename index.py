@@ -47,7 +47,7 @@ def prompt_user():
     code_tokens = read_and_tokenize_code_files('./target_repos')
     past_conversation = ""
     while True:
-        question = input("What would you like to know about this repository? ")
+        question = input("\nWhat would you like to know about this repo? ")
         answer = ask_gpt4_about_code(code_tokens, question, past_conversation)
         print("\n>> GPT-4's answer: ", answer)
 
