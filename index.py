@@ -37,7 +37,7 @@ def ask_gpt4_about_code(code_tokens, question, past_conversation=""):
     prompt = f"The code is:\n{code_text}\n\n{past_conversation}{question}"
 
     # Call GPT-4 API to get a response to the question about the code
-    response = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=100)
+    response = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=1000)
 
     return response.choices[0].text.strip()
 
