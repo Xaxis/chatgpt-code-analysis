@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 import os
 import shutil
@@ -12,11 +13,16 @@ import openai
 
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
+
 def highlight_code(code_string):
-    lexer = get_lexer_by_name("python")
+    try:
+        lexer = pygments.lexers.guess_lexer(code_string)
+    except pygments.util.ClassNotFound:
+        lexer = pygments.lexers.get_lexer_by_name("text")
     formatter = TerminalFormatter()
     highlighted_code = pygments.highlight(code_string, lexer, formatter)
     return highlighted_code
+
 
 def download_github_repo(repo_url, local_dir="target_repos"):
     repo_name = repo_url.split('/')[-1]
@@ -25,6 +31,7 @@ def download_github_repo(repo_url, local_dir="target_repos"):
         shutil.rmtree(full_local_path)
     os.makedirs(full_local_path, exist_ok=True)
     Repo.clone_from(repo_url, full_local_path)
+
 
 def read_and_tokenize_all_files(repo_path, ignore=None):
     if ignore is None:
@@ -55,14 +62,16 @@ def read_and_tokenize_all_files(repo_path, ignore=None):
                 })
     return structured_tokens
 
-def ask_gpt4_about_code(structured_tokens, question, past_conversation="", max_tokens=1000):
+
+def ask_gpt4_about_code(structured_tokens, question, max_tokens=1000):
     code_text = ""
     for file_data in structured_tokens:
         tokens = ' '.join(token[1] for token in file_data['tokens'])
         code_text += f"In the file '{file_data['file_path']}' of repo '{file_data['repo']}', the code is:\n{tokens}\n\n"
-    prompt = f"{code_text}{past_conversation}{question}\n(Wrap all code blocks it in triple backticks for highlighting.)"
+    prompt = f"{code_text}{question}\n(Wrap all code blocks it in triple backticks for highlighting.)"
     response = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=max_tokens)
     return response.choices[0].text.strip()
+
 
 def prompt_user():
     while True:
@@ -75,36 +84,32 @@ def prompt_user():
         repo_path = os.path.join('./target_repos', repo_name)
         code_tokens = read_and_tokenize_all_files(
             repo_path,
-            ["*.txt", "temp", ".git", "*.iml", ".idea", ".gitignore", "*.md", "*.json", "*.yml", "*.yaml", "*.xml", "*.gradle", "*.properties"]
+            ["*.txt", "temp", ".git", "*.iml", ".idea", ".gitignore", "*.md", "*.json", "*.yml", "*.yaml", "*.xml",
+             "*.gradle", "*.properties"]
         )
 
         # Get max_tokens
-        max_tokens = input(colored("\n>> Enter 'max_tokens' value [1000]: ", "green"))
+        max_tokens = input(colored("\n>> Enter max token value [1000]: ", "green"))
         max_tokens = int(max_tokens) if max_tokens.isdigit() else 1000
 
         # Start conversation
-        past_conversation = ""
         while True:
-            question = input(colored("\n>> What would you like to know? ", "green"))
-            answer = ask_gpt4_about_code(code_tokens, question, past_conversation, max_tokens)
+            question = input(colored("\n>> ", "green"))
+            answer = ask_gpt4_about_code(code_tokens, question, max_tokens)
 
             # Check answer for code blocks to format
             if "```" in answer:
-                start = answer.index("```") + 3
-                end = answer.rindex("```")
-                code_block = answer[start:end].strip()
-                highlighted_code = highlight_code(code_block)
-                highlighted_code = highlighted_code.replace("```", "")
-                answer = answer[:start-3] + highlighted_code + answer[end+3:]
+                while "```" in answer:
+                    start = answer.index("```") + 3
+                    end = answer.index("```", start)
+                    code_block = answer[start:end].strip()
+                    highlighted_code = highlight_code(code_block)
+                    highlighted_code = colored("```", "green") + highlighted_code + colored("```", "green")
+                    answer = answer[:start - 3] + highlighted_code + answer[end + 3:]
 
             # Print answer
-            print("\n", answer)
-            past_conversation += answer + "\n\n"
+            print("\n", answer.strip())
 
-            # Check if user wants to start a new session or continue asking questions
-            new_session = input(colored("\n>> Ask another question? (y/n) ", "green"))
-            if new_session.lower() == 'n':
-                break
 
 # Main program initialization
 if __name__ == "__main__":
