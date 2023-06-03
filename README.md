@@ -1,2 +1,3 @@
 # chatgpt-code-analysis
-Simple tool for asking questions about a repo.
+
+Simple tool for asking GPT4 questions about a repo held at a Github url.
