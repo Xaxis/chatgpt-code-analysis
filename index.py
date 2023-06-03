@@ -1,5 +1,4 @@
 from dotenv import load_dotenv
-
 load_dotenv()
 import os
 import shutil
@@ -63,13 +62,13 @@ def read_and_tokenize_all_files(repo_path, ignore=None):
     return structured_tokens
 
 
-def ask_gpt4_about_code(structured_tokens, question, max_tokens=1000):
+def ask_gpt4_about_code(structured_tokens, question, engine_id, max_tokens=1000):
     code_text = ""
     for file_data in structured_tokens:
         tokens = ' '.join(token[1] for token in file_data['tokens'])
         code_text += f"In the file '{file_data['file_path']}' of repo '{file_data['repo']}', the code is:\n{tokens}\n\n"
     prompt = f"{code_text}{question}\n(Wrap all code blocks it in triple backticks for highlighting.)"
-    response = openai.Completion.create(engine="text-davinci-003", prompt=prompt, max_tokens=max_tokens)
+    response = openai.Completion.create(engine=engine_id, prompt=prompt, max_tokens=max_tokens)
     return response.choices[0].text.strip()
 
 
@@ -84,9 +83,16 @@ def prompt_user():
         repo_path = os.path.join('./target_repos', repo_name)
         code_tokens = read_and_tokenize_all_files(
             repo_path,
-            ["*.txt", "temp", ".git", "*.iml", ".idea", ".gitignore", "*.md", "*.json", "*.yml", "*.yaml", "*.xml",
-             "*.gradle", "*.properties"]
+            [
+                "*.txt", "temp", ".git", "*.iml", ".idea",
+             ".gitignore", "*.md", "*.json", "*.yml",
+             "*.yaml", "*.xml", "*.gradle", "*.properties"
+            ]
         )
+
+        # Choose OpenAI engine
+        engine_choice = input(colored("\n>> Choose engine: gpt35 or gpt4 [gpt4]: ", "green"))
+        engine_id = "text-davinci-003" if engine_choice == "gpt4" else "text-davinci-002"
 
         # Get max_tokens
         max_tokens = input(colored("\n>> Enter max token value [1000]: ", "green"))
@@ -95,20 +101,19 @@ def prompt_user():
         # Start conversation
         while True:
             question = input(colored("\n>> ", "green"))
-            answer = ask_gpt4_about_code(code_tokens, question, max_tokens)
+            answer = ask_gpt4_about_code(code_tokens, question, engine_id, max_tokens)
 
             # Check answer for code blocks to format
             if "```" in answer:
-                while "```" in answer:
-                    start = answer.index("```") + 3
-                    end = answer.index("```", start)
-                    code_block = answer[start:end].strip()
-                    highlighted_code = highlight_code(code_block)
-                    highlighted_code = colored("```", "green") + highlighted_code + colored("```", "green")
-                    answer = answer[:start - 3] + highlighted_code + answer[end + 3:]
+                start = answer.index("```") + 3
+                end = answer.index("```", start)
+                code_block = answer[start:end].strip()
+                highlighted_code = highlight_code(code_block)
+                highlighted_code = highlighted_code.replace("```", "")
+                answer = answer[:start - 3] + highlighted_code + answer[end + 3:]
 
             # Print answer
-            print("\n", answer.strip())
+            print("\n" + answer.strip())
 
 
 # Main program initialization
