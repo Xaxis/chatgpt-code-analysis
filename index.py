@@ -38,6 +38,10 @@ def download_github_repo(repo_url, local_dir="target_repos"):
     if os.path.exists(full_local_path):
         shutil.rmtree(full_local_path)
     os.makedirs(full_local_path, exist_ok=True)
+    github_token = os.getenv('GITHUB_TOKEN')
+    if not github_token:
+        raise EnvironmentError("Please set the GITHUB_TOKEN environment variable")
+    repo_url = repo_url.replace('https://', f'https://{github_token}@')
     Repo.clone_from(repo_url, full_local_path)
 
 
@@ -245,7 +249,7 @@ def prompt_user():
             total_token_count = 0
             for message in messages:
                 total_token_count += num_tokens_from_string(message['content'], "gpt-3.5-turbo")
-                print(f"{message['role']}: {message['content']}")
+                print(f"\n\n{message['role']}: {message['content']}")
 
             # Output total token count
             print(f"Total tokens: {total_token_count}")
