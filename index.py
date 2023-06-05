@@ -249,7 +249,7 @@ def prompt_user():
             total_token_count = 0
             for message in messages:
                 total_token_count += num_tokens_from_string(message['content'], "gpt-3.5-turbo")
-                print(f"\n\n{message['role']}: {message['content']}")
+                # print(f"\n\n{message['role']}: {message['content']}")
 
             # Output total token count
             print(f"Total tokens: {total_token_count}")
