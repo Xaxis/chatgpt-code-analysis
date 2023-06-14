@@ -155,10 +155,9 @@ def build_tokens_string(repo_name, structured_tokens, selected_files):
     return token_string
 
 
-def ask_gpt_question(context_messages, engine_id, max_tokens=4096):
-    engine_target = "gpt-4" if engine_id == "GPT4" else "gpt-3.5-turbo"
+def ask_gpt_question(context_messages, max_tokens=4096):
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model="gpt-3.5-turbo-0613",
         messages=context_messages,
         max_tokens=max_tokens
     )
@@ -276,6 +275,7 @@ def prompt_question_loop():
                 "Add Context",
                 "Save Context",
                 "Edit Context",
+                "Display Dir Tree",
                 "Start Over",
                 "Exit"],
             default="Send to GPT"
@@ -319,9 +319,6 @@ def run_conversation():
         selected_files = prompt_question_repo_files(file_paths)
         token_code_string = build_tokens_string(repo_name, code_tokens, selected_files)
 
-    # Prompt user for engine
-    engine_id = prompt_question_engine()
-
     # Prompt user for max tokens
     max_tokens = prompt_question_max_tokens()
 
@@ -338,23 +335,24 @@ def run_conversation():
                 "role": "system",
                 "content": f"The repo were looking at is called: '{repo_name}'. \n\n" +
                            f"The repo's directory structure is as follows:\n\n{repo_tree}\n\n" +
-                           "Subsequent messages will provide code for GPT analysis, and possibly a question or further instructions." +
-                           "If no further question or instruction is provided, respond with a repo code analysis based on the information received."
+                           "Subsequent messages MAY provide code for analysis." +
+                           "Respond with repo analysis based on the information received and any further messages."
             })
 
             # Build code chunk messages per file
-            for file_path in selected_files:
-                file_data = next((data for data in code_tokens if data['file_path'] == file_path), None)
-                if file_data:
-                    tokens = ''.join(token[1] for token in file_data['tokens'])
-                    file_path = file_path.replace(f"./repos/{repo_name}/", "")
-                    token_code_string = f"File: '{file_path}', code:\n{tokens}\n\n"
-                    chunks = textwrap.wrap(token_code_string, max_tokens)
-                    for chunk in chunks:
-                        context_messages.append({
-                            "role": "user",
-                            "content": chunk
-                        })
+            # @TODO: This is currently disabled because token limits are too small for most repos
+            # for file_path in selected_files:
+            #     file_data = next((data for data in code_tokens if data['file_path'] == file_path), None)
+            #     if file_data:
+            #         tokens = ''.join(token[1] for token in file_data['tokens'])
+            #         file_path = file_path.replace(f"./repos/{repo_name}/", "")
+            #         token_code_string = f"File: '{file_path}', code:\n{tokens}\n\n"
+            #         chunks = textwrap.wrap(token_code_string, max_tokens)
+            #         for chunk in chunks:
+            #             context_messages.append({
+            #                 "role": "user",
+            #                 "content": chunk
+            #             })
 
         # Handle user input
         if selected_question == "Send to GPT":
@@ -368,7 +366,7 @@ def run_conversation():
             print(f"Total tokens: {total_token_count}")
 
             # Ask GPT question
-            answer = ask_gpt_question(context_messages, engine_id, max_tokens)
+            answer = ask_gpt_question(context_messages, max_tokens)
 
             # Check answer for code blocks to format
             if "```" in answer:
@@ -402,6 +400,10 @@ def run_conversation():
 
         if selected_question == "Edit Context" and len(context_messages) <= 0:
             print("No context messages to edit. Please select another option.\n\n")
+            continue
+
+        if selected_question == "Display Dir Tree":
+            print(repo_tree)
             continue
 
         if selected_question == "Start Over":
