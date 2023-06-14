@@ -14,6 +14,7 @@ import textwrap
 import openai
 import tiktoken
 import json
+import subprocess
 
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
@@ -58,9 +59,10 @@ def list_message_contexts(repo_name, local_dir="contexts"):
         return os.listdir(os.path.join(local_dir, repo_name))
 
 
-def download_github_repo(repo_url, local_dir="repos"):
-    repo_name = repo_url.split('/')[-1]
-    full_local_path = os.path.join(local_dir, repo_name)
+def download_github_repo(repo_url, local_dir="repos", gh_token=None):
+    repo_name = repo_url.split('https://github.com/')[-1]
+    dir_name = repo_name.replace('/', '_')
+    full_local_path = os.path.join(local_dir, dir_name)
     if os.path.exists(full_local_path):
         shutil.rmtree(full_local_path)
     os.makedirs(full_local_path, exist_ok=True)
@@ -68,7 +70,18 @@ def download_github_repo(repo_url, local_dir="repos"):
     if not github_token:
         raise EnvironmentError("Please set the GITHUB_TOKEN environment variable")
     repo_url = repo_url.replace('https://', f'https://{github_token}@')
-    Repo.clone_from(repo_url, full_local_path)
+    try:
+        Repo.clone_from(repo_url, full_local_path)
+    except Exception as e:
+        if '403' in str(e):
+            if not gh_token:
+                raise EnvironmentError("Please set the GH_TOKEN environment variable")
+            command = f"gh auth login --with-token < {gh_token} && gh repo clone {repo_url} {full_local_path}"
+            process = subprocess.run(command, shell=True, check=True, capture_output=True)
+            if process.returncode != 0:
+                print(f"Error: {process.stderr}")
+        else:
+            raise e
 
 
 def read_and_tokenize_all_files(repo_path, ignore=None):
@@ -143,7 +156,7 @@ def build_tokens_string(repo_name, structured_tokens, selected_files):
 
 
 def ask_gpt_question(context_messages, engine_id, max_tokens=4096):
-    engine_target = "gpt-3.5-turbo" if engine_id == "GPT4" else "gpt-3.5-turbo"
+    engine_target = "gpt-4" if engine_id == "GPT4" else "gpt-3.5-turbo"
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=context_messages,
@@ -194,6 +207,8 @@ def prompt_question_repo_files(file_paths):
 
 
 def prompt_question_load_context_messages(repo_name):
+    if not os.path.exists(os.path.join('contexts', repo_name)):
+        return []
     file_paths = list_message_contexts(repo_name)
     if not file_paths:
         return []
@@ -321,25 +336,25 @@ def run_conversation():
             question_count += 1
             context_messages.append({
                 "role": "system",
-                "content": f"This is the initial context message. The repo we're working with is '{repo_name}'. " +
-                           f"Its directory structure is as follows:\n\n{repo_tree}\n\n" +
+                "content": f"The repo were looking at is called: '{repo_name}'. \n\n" +
+                           f"The repo's directory structure is as follows:\n\n{repo_tree}\n\n" +
                            "Subsequent messages will provide code for GPT analysis, and possibly a question or further instructions." +
                            "If no further question or instruction is provided, respond with a repo code analysis based on the information received."
             })
 
-            # Build code chunk messages
-            chunks = textwrap.wrap(token_code_string, max_tokens)
-            for i, chunk in enumerate(chunks):
-                if i < len(chunks) - 1:
-                    context_messages.append({
-                        "role": "user",
-                        "content": f"{chunk}"
-                    })
-                else:
-                    context_messages.append({
-                        "role": "user",
-                        "content": f"{chunk}"
-                    })
+            # Build code chunk messages per file
+            for file_path in selected_files:
+                file_data = next((data for data in code_tokens if data['file_path'] == file_path), None)
+                if file_data:
+                    tokens = ''.join(token[1] for token in file_data['tokens'])
+                    file_path = file_path.replace(f"./repos/{repo_name}/", "")
+                    token_code_string = f"File: '{file_path}', code:\n{tokens}\n\n"
+                    chunks = textwrap.wrap(token_code_string, max_tokens)
+                    for chunk in chunks:
+                        context_messages.append({
+                            "role": "user",
+                            "content": chunk
+                        })
 
         # Handle user input
         if selected_question == "Send to GPT":
@@ -382,7 +397,7 @@ def run_conversation():
             save_new_file = initial_context_messages_count <= 0
             initial_context_messages_count = len(context_messages)
             file_path = save_context_messages(context_messages, repo_name, save_new_file)
-            print(f"Context saved to {file_path}\n\n")
+            print(f"Context saved to {file_path}\n")
             continue
 
         if selected_question == "Edit Context" and len(context_messages) <= 0:
@@ -396,7 +411,7 @@ def run_conversation():
             return False
 
 
-def prompt_user():
+def run():
     while True:
         result = run_conversation()
         if result is True:
@@ -407,4 +422,4 @@ def prompt_user():
 
 # Main program initialization
 if __name__ == "__main__":
-    prompt_user()
+    run()
