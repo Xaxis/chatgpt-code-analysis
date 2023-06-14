@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
+import re
 import shutil
 from git import Repo
 import pygments
@@ -13,7 +14,6 @@ import textwrap
 import openai
 import tiktoken
 import json
-from datetime import datetime
 
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
@@ -27,11 +27,18 @@ def highlight_code(code_string):
     return highlighted_code
 
 
-def save_context_messages(conversation, repo_name, folder='contexts'):
+def save_context_messages(conversation, repo_name, increment=False, folder='contexts'):
     os.makedirs(folder, exist_ok=True)
     os.makedirs(os.path.join(folder, repo_name), exist_ok=True)
-    filename = datetime.now().strftime('%Y-%m-%d_%H-%M-%S.json')
-    file_path = os.path.join(folder, repo_name, filename)
+    existing_files = fnmatch.filter(os.listdir(os.path.join(folder, repo_name)), 'context-*.json')
+    if increment:
+        last_file_index = max([int(re.search(r'(\d+)', file).group()) for file in existing_files], default=0)
+        new_file_index = last_file_index + 1
+    elif len(existing_files) == 0:
+        new_file_index = 1
+    else:
+        new_file_index = len(existing_files)
+    file_path = os.path.join(folder, repo_name, f'context-{new_file_index}.json')
     with open(file_path, 'w') as f:
         json.dump(conversation, f, indent=4)
     return file_path
@@ -135,11 +142,11 @@ def build_tokens_string(repo_name, structured_tokens, selected_files):
     return token_string
 
 
-def ask_gpt_question(messages, engine_id, max_tokens=4096):
+def ask_gpt_question(context_messages, engine_id, max_tokens=4096):
     engine_target = "gpt-3.5-turbo" if engine_id == "GPT4" else "gpt-3.5-turbo"
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=context_messages,
         max_tokens=max_tokens
     )
     return response['choices'][0]['message']['content'].strip()
@@ -193,12 +200,12 @@ def prompt_question_load_context_messages(repo_name):
     else:
         context_files_list = [
             List('context_files',
-                 message="Select file to existing context from",
-                 choices=['None'] + file_paths,
-                 default=['None']),
+                 message="Load existing context file from",
+                 choices=['New Context'] + file_paths,
+                 default=['New Context']),
         ]
         selected_context_file = prompt(context_files_list)['context_files']
-        if selected_context_file != 'None':
+        if selected_context_file != 'New Context':
             context_file_path = os.path.join('contexts', repo_name, selected_context_file)
             with open(context_file_path, 'r') as f:
                 context_data = json.load(f)
@@ -249,7 +256,13 @@ def prompt_question_loop():
         List(
             'selected_question',
             message="What now?",
-            choices=["Send to GPT", "Add Context", "Save Context", "Edit Context", "Start Over", "Exit"],
+            choices=[
+                "Send to GPT",
+                "Add Context",
+                "Save Context",
+                "Edit Context",
+                "Start Over",
+                "Exit"],
             default="Send to GPT"
         ),
     ]
@@ -257,123 +270,139 @@ def prompt_question_loop():
     return selected_question
 
 
-def prompt_user():
-    while True:
-        question_count = 0
-        ignores =             [
-            "*.txt", "temp", ".git", "*.iml", ".idea", "node_modules",
-            "*.yaml", "*.xml", "*.gradle", "*.properties"
-        ]
+def run_conversation():
+    question_count = 0
+    ignores =             [
+        "*.txt", "temp", ".git", "*.iml", ".idea", "node_modules",
+        "*.yaml", "*.xml", "*.gradle", "*.properties"
+    ]
 
-        # Prompt user for repo
-        selected_repo = prompt_question_repo()
+    # Prompt user for repo
+    selected_repo = prompt_question_repo()
 
-        # Prompt user for repo URL if needed
-        repo_name = prompt_question_repo_url(selected_repo)
+    # Prompt user for repo URL if needed
+    repo_name = prompt_question_repo_url(selected_repo)
 
-        # Prompt to load existing context messages for this repo
-        messages = prompt_question_load_context_messages(repo_name)
+    # Prompt to load existing context messages for this repo
+    context_messages = prompt_question_load_context_messages(repo_name)
+    initial_context_messages_count = len(context_messages)
 
-        # Build repo dir tree
-        repo_tree = build_repo_dir_tree(repo_name, ignores)
+    # Derive the question count from the context messages
+    if len(context_messages):
+        question_count = 1 + len([message for message in context_messages if message['content'].startswith('Question')])
 
-        # Tokenize files in repo
-        repo_path = os.path.join('./repos', repo_name)
-        code_tokens, file_paths = read_and_tokenize_all_files(repo_path, ignores)
+    # Build repo dir tree
+    repo_tree = build_repo_dir_tree(repo_name, ignores)
 
-        # Prompt user for files to analyze
+    # Tokenize files in repo
+    repo_path = os.path.join('./repos', repo_name)
+    code_tokens, file_paths = read_and_tokenize_all_files(repo_path, ignores)
+
+    # Prompt user for files to analyze, if context messages haven't been loaded
+    # Otherwise use selected files to build tokenized string of code
+    if not context_messages:
         selected_files = prompt_question_repo_files(file_paths)
-
-        # Prompt user for engine
-        engine_id = prompt_question_engine()
-
-        # Prompt user for max tokens
-        max_tokens = prompt_question_max_tokens()
-
-        # Build token string
         token_code_string = build_tokens_string(repo_name, code_tokens, selected_files)
 
-        # Start conversation
-        while True:
+    # Prompt user for engine
+    engine_id = prompt_question_engine()
 
-            # Prompt user for next action
-            selected_question = prompt_question_loop()
+    # Prompt user for max tokens
+    max_tokens = prompt_question_max_tokens()
 
-            # Build system (first) message. This is the initial context message.
+    # Start conversation
+    while True:
+
+        # Prompt user for next action
+        selected_question = prompt_question_loop()
+
+        # Build system (first) message. This is the initial context message.
+        if question_count == 0:
             question_count += 1
-            if question_count == 1:
-                messages.append({
-                    "role": "system",
-                    "content": f"This is the initial context message. The repo we're working with is '{repo_name}'. " +
-                               f"Its directory structure is as follows:\n\n{repo_tree}\n\n" +
-                               "Subsequent messages will provide code for GPT analysis, and possibly a question or further instructions." +
-                               "If no further question or instruction is provided, respond with a repo code analysis based on the information received."
-                })
+            context_messages.append({
+                "role": "system",
+                "content": f"This is the initial context message. The repo we're working with is '{repo_name}'. " +
+                           f"Its directory structure is as follows:\n\n{repo_tree}\n\n" +
+                           "Subsequent messages will provide code for GPT analysis, and possibly a question or further instructions." +
+                           "If no further question or instruction is provided, respond with a repo code analysis based on the information received."
+            })
 
-                # Build code chunk messages
-                chunks = textwrap.wrap(token_code_string, max_tokens)
-                for i, chunk in enumerate(chunks):
-                    if i < len(chunks) - 1:
-                        messages.append({
-                            "role": "user",
-                            "content": f"{chunk}"
-                        })
-                    else:
-                        messages.append({
-                            "role": "user",
-                            "content": f"{chunk}"
-                        })
+            # Build code chunk messages
+            chunks = textwrap.wrap(token_code_string, max_tokens)
+            for i, chunk in enumerate(chunks):
+                if i < len(chunks) - 1:
+                    context_messages.append({
+                        "role": "user",
+                        "content": f"{chunk}"
+                    })
+                else:
+                    context_messages.append({
+                        "role": "user",
+                        "content": f"{chunk}"
+                    })
 
-            # Handle user input
-            if selected_question == "Send to GPT":
+        # Handle user input
+        if selected_question == "Send to GPT":
 
-                # Attempt to count tokens
-                total_token_count = 0
-                for message in messages:
-                    total_token_count += num_tokens_from_string(message['content'], "gpt-3.5-turbo")
+            # Attempt to count tokens
+            total_token_count = 0
+            for message in context_messages:
+                total_token_count += num_tokens_from_string(message['content'], "gpt-3.5-turbo")
 
-                # Output total token count
-                print(f"Total tokens: {total_token_count}")
+            # Output total token count
+            print(f"Total tokens: {total_token_count}")
 
-                # Ask GPT question
-                answer = ask_gpt_question(messages, engine_id, max_tokens)
+            # Ask GPT question
+            answer = ask_gpt_question(context_messages, engine_id, max_tokens)
 
-                # Check answer for code blocks to format
-                if "```" in answer:
-                    start = answer.index("```") + 3
-                    end = answer.index("```", start)
-                    code_block = answer[start:end].strip()
-                    highlighted_code = highlight_code(code_block)
-                    highlighted_code = highlighted_code.replace("```", "")
-                    answer = answer[:start - 3] + highlighted_code + answer[end + 3:]
+            # Check answer for code blocks to format
+            if "```" in answer:
+                start = answer.index("```") + 3
+                end = answer.index("```", start)
+                code_block = answer[start:end].strip()
+                highlighted_code = highlight_code(code_block)
+                highlighted_code = highlighted_code.replace("```", "")
+                answer = answer[:start - 3] + highlighted_code + answer[end + 3:]
 
-                # Print answer
-                print("\n" + answer.strip() + "\n")
-                continue
+            # Print answer
+            print("\n" + answer.strip() + "\n")
+            continue
 
-            if selected_question == "Add Context":
-                context_message = prompt_add_context_message()
-                print("\n")
-                messages.append({
-                    "role": "user",
-                    "content": f"Question {question_count}: {context_message}"
-                })
-                continue
+        if selected_question == "Add Context":
+            context_message = prompt_add_context_message()
+            print("\n")
+            context_messages.append({
+                "role": "user",
+                "content": f"Question {question_count}: {context_message}"
+            })
+            question_count += 1
+            continue
 
-            if selected_question == "Save Context":
-                file_path = save_context_messages(messages, repo_name)
-                print(f"Context saved to {file_path}\n\n")
-                continue
+        if selected_question == "Save Context":
+            save_new_file = initial_context_messages_count <= 0
+            initial_context_messages_count = len(context_messages)
+            file_path = save_context_messages(context_messages, repo_name, save_new_file)
+            print(f"Context saved to {file_path}\n\n")
+            continue
 
-            if selected_question == "Edit context" and len(messages) <= 0:
-                print("No context messages to edit. Please select another option.\n\n")
-                continue
+        if selected_question == "Edit Context" and len(context_messages) <= 0:
+            print("No context messages to edit. Please select another option.\n\n")
+            continue
 
-            if selected_question == "Exit":
-                return
+        if selected_question == "Start Over":
+            return True
 
-            if selected_question == "Start over":
-                break
+        if selected_question == "Exit":
+            return False
+
+
+def prompt_user():
+    while True:
+        result = run_conversation()
+        if result is True:
+            continue
+        elif result is False:
+            break
 
 
 # Main program initialization
